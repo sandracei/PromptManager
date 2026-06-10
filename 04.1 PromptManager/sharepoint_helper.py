@@ -1,134 +1,192 @@
 """
-sharepoint_helper.py
-Handles authentication and read/write of prompts.csv on SharePoint
-using MSAL device-code flow (no app registration needed beyond the
-well-known Microsoft Office client_id).
+sharepoint_helper.py — versión Azure App Service
+Autenticación OAuth con cuenta de empresa via MSAL (authorization code flow).
 """
 
-import os
-import json
-import io
+import os, io, json
 import pandas as pd
-import msal
-import requests
+import msal, requests
 import streamlit as st
 
-# ── SharePoint config ────────────────────────────────────────────────────────
-SHAREPOINT_URL   = "https://corpdir.sharepoint.com"
-SITE_PATH        = "/sites/DWT_OOEU"
-FOLDER_PATH      = "/OOEU Workstream/Support Chatbot/Operational/04.1 PromptManager"
-FILE_NAME        = "prompts.csv"
-TOKEN_CACHE_FILE = ".msal_token_cache.json"
+# ── Configuración — rellena estos valores ────────────────────────────────────
+CLIENT_ID     = os.environ.get("AAD_CLIENT_ID", "TU_CLIENT_ID_AQUI")
+CLIENT_SECRET = os.environ.get("AAD_CLIENT_SECRET", "TU_CLIENT_SECRET_AQUI")
+TENANT_ID     = os.environ.get("AAD_TENANT_ID", "TU_TENANT_ID_AQUI")
+REDIRECT_URI  = os.environ.get("REDIRECT_URI", "https://TUNOMBRE.azurewebsites.net/")
 
-# Microsoft's well-known public client ID for Office apps
-# (works for delegated auth without registering your own Azure app)
-CLIENT_ID = "d3590ed6-52b3-4102-aeff-aad2292ab01c"
-AUTHORITY = "https://login.microsoftonline.com/common"
-SCOPES    = ["https://corpdir.sharepoint.com/.default"]
+SHAREPOINT_URL = "https://corpdir.sharepoint.com"
+SITE_PATH      = "/sites/DWT_OOEU"
+FOLDER_PATH    = "/OOEU Workstream/Support Chatbot/Operational/04.1 PromptManager"
+FILE_NAME      = "prompts.csv"
+
+AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
+SCOPES    = ["https://corpdir.sharepoint.com/AllSites.ReadWrite", "User.Read"]
 
 COLUMNS = ["id", "nombre", "descripcion", "prompt", "version",
-           "cambios", "responsable", "fecha", "categoria", "activo"]
+           "cambios", "responsable", "fecha", "categoria", "activo", "precision", "test_file"]
 
 
-# ── Token cache (persisted to disk) ─────────────────────────────────────────
-def _build_msal_app():
-    cache = msal.SerializableTokenCache()
-    if os.path.exists(TOKEN_CACHE_FILE):
-        cache.deserialize(open(TOKEN_CACHE_FILE).read())
-    app = msal.PublicClientApplication(CLIENT_ID, authority=AUTHORITY, token_cache=cache)
-    return app, cache
+# ── Auth helpers ─────────────────────────────────────────────────────────────
+def _msal_app():
+    return msal.ConfidentialClientApplication(
+        CLIENT_ID,
+        authority=AUTHORITY,
+        client_credential=CLIENT_SECRET,
+    )
 
+def get_auth_url():
+    """Generate the Microsoft login URL."""
+    app = _msal_app()
+    return app.get_authorization_request_url(
+        scopes=SCOPES,
+        redirect_uri=REDIRECT_URI,
+        state="streamlit",
+    )
 
-def _save_cache(cache):
-    if cache.has_state_changed:
-        with open(TOKEN_CACHE_FILE, "w") as f:
-            f.write(cache.serialize())
+def exchange_code_for_token(code: str) -> dict:
+    """Exchange the auth code (from redirect) for an access token."""
+    app = _msal_app()
+    result = app.acquire_token_by_authorization_code(
+        code=code,
+        scopes=SCOPES,
+        redirect_uri=REDIRECT_URI,
+    )
+    return result
 
+def get_access_token() -> str:
+    """
+    Returns a valid access token.
+    If not logged in, shows a login button and stops rendering.
+    """
+    # Already have a token in session?
+    token_data = st.session_state.get("token_data")
 
-def get_access_token():
-    """Return a valid access token, triggering device-code login if needed."""
-    app, cache = _build_msal_app()
+    if token_data and "access_token" in token_data:
+        # Try silent refresh
+        app = _msal_app()
+        accounts = app.get_accounts()
+        if accounts:
+            result = app.acquire_token_silent(SCOPES, account=accounts[0])
+            if result and "access_token" in result:
+                st.session_state["token_data"] = result
+                return result["access_token"]
+        return token_data["access_token"]
 
-    # Try silent first
-    accounts = app.get_accounts()
-    if accounts:
-        result = app.acquire_token_silent(SCOPES, account=accounts[0])
-        if result and "access_token" in result:
-            _save_cache(cache)
-            return result["access_token"]
-
-    # Device-code flow
-    flow = app.initiate_device_flow(scopes=SCOPES)
-    if "user_code" not in flow:
-        raise RuntimeError(f"Error iniciando autenticación: {flow}")
-
-    # Show instructions in Streamlit
-    st.warning("🔐 **Inicio de sesión necesario**")
-    st.markdown(f"""
-    1. Abre [https://microsoft.com/devicelogin](https://microsoft.com/devicelogin) en el navegador
-    2. Introduce el código: **`{flow['user_code']}`**
-    3. Inicia sesión con tu cuenta de empresa
-    4. Vuelve aquí y pulsa **Verificar sesión**
-    """)
-    st.code(flow['user_code'], language=None)
-
-    if st.button("✅ Verificar sesión"):
-        result = app.acquire_token_by_device_flow(flow)
+    # Check for auth code in URL query params (after redirect)
+    params = st.query_params
+    if "code" in params:
+        code = params["code"]
+        result = exchange_code_for_token(code)
         if "access_token" in result:
-            _save_cache(cache)
-            st.success("✅ Sesión iniciada correctamente. Recargando…")
+            st.session_state["token_data"] = result
+            st.query_params.clear()
             st.rerun()
         else:
             st.error(f"Error de autenticación: {result.get('error_description', result)}")
+            st.stop()
+
+    # Not logged in — show login screen
+    auth_url = get_auth_url()
+    st.markdown("""
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+    min-height:60vh;gap:1.5rem;">
+      <div style="font-size:3rem;">📚</div>
+      <div style="font-size:1.5rem;font-weight:700;color:#1e293b;">Biblioteca de Prompts</div>
+      <div style="color:#64748b;font-size:0.95rem;">Inicia sesión con tu cuenta de empresa para continuar</div>
+    </div>
+    """, unsafe_allow_html=True)
+    col = st.columns([1, 2, 1])[1]
+    with col:
+        st.link_button(
+            "🔐  Iniciar sesión con Microsoft",
+            auth_url,
+            use_container_width=True,
+            type="primary",
+        )
     st.stop()
 
 
-# ── SharePoint REST helpers ──────────────────────────────────────────────────
+# ── SharePoint read / write ──────────────────────────────────────────────────
 def _headers(token):
     return {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json;odata=verbose",
     }
 
-
-def _file_url(token):
-    """Returns the REST URL for the CSV file."""
-    encoded = requests.utils.quote(f"{FOLDER_PATH}/{FILE_NAME}")
-    return f"{SHAREPOINT_URL}{SITE_PATH}/_api/web/GetFileByServerRelativeUrl('{SITE_PATH}{encoded}')"
-
-
-def load_from_sharepoint():
-    """Download prompts.csv from SharePoint and return a DataFrame."""
-    token = get_access_token()
-    url   = _file_url(token) + "/$value"
-    resp  = requests.get(url, headers=_headers(token))
-
+def load_from_sharepoint() -> pd.DataFrame:
+    token    = get_access_token()
+    encoded  = requests.utils.quote(f"{SITE_PATH}{FOLDER_PATH}/{FILE_NAME}")
+    url      = f"{SHAREPOINT_URL}{SITE_PATH}/_api/web/GetFileByServerRelativeUrl('{encoded}')/$value"
+    resp     = requests.get(url, headers=_headers(token))
     if resp.status_code == 404:
-        # File doesn't exist yet → return empty DataFrame
         return pd.DataFrame(columns=COLUMNS)
     resp.raise_for_status()
-
     df = pd.read_csv(io.StringIO(resp.content.decode("utf-8")))
     for col in COLUMNS:
         if col not in df.columns:
             df[col] = ""
     return df
 
-
 def save_to_sharepoint(df: pd.DataFrame):
-    """Upload the DataFrame as prompts.csv to SharePoint."""
-    token   = get_access_token()
-    encoded = requests.utils.quote(f"{FOLDER_PATH}/{FILE_NAME}")
-    upload_url = (
+    token        = get_access_token()
+    folder_enc   = requests.utils.quote(f"{SITE_PATH}{FOLDER_PATH}")
+    upload_url   = (
         f"{SHAREPOINT_URL}{SITE_PATH}/_api/web/"
-        f"GetFolderByServerRelativeUrl('{SITE_PATH}{requests.utils.quote(FOLDER_PATH)}')"
+        f"GetFolderByServerRelativeUrl('{folder_enc}')"
         f"/Files/Add(url='{FILE_NAME}',overwrite=true)"
     )
-    csv_bytes = df.to_csv(index=False).encode("utf-8")
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type":  "text/csv",
         "Accept":        "application/json;odata=verbose",
     }
-    resp = requests.post(upload_url, data=csv_bytes, headers=headers)
+    resp = requests.post(upload_url, data=df.to_csv(index=False).encode("utf-8"), headers=headers)
     resp.raise_for_status()
+
+
+def upload_test_file(file_bytes: bytes, file_name: str) -> str:
+    """
+    Upload a test file to the Tests subfolder in SharePoint.
+    Returns the stored file name (used as reference in the CSV).
+    """
+    token      = get_access_token()
+    safe_name  = file_name.replace("'", "")          # avoid quote issues in REST URL
+    folder_enc = requests.utils.quote(f"{SITE_PATH}{FOLDER_PATH}/Tests")
+
+    # Make sure the Tests subfolder exists (ignore error if it already does)
+    create_url = (
+        f"{SHAREPOINT_URL}{SITE_PATH}/_api/web/"
+        f"GetFolderByServerRelativeUrl('{requests.utils.quote(SITE_PATH + FOLDER_PATH)}')"
+        f"/Folders/Add('Tests')"
+    )
+    requests.post(create_url, headers={
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json;odata=verbose",
+    })
+
+    upload_url = (
+        f"{SHAREPOINT_URL}{SITE_PATH}/_api/web/"
+        f"GetFolderByServerRelativeUrl('{folder_enc}')"
+        f"/Files/Add(url='{safe_name}',overwrite=true)"
+    )
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type":  "application/octet-stream",
+        "Accept":        "application/json;odata=verbose",
+    }
+    resp = requests.post(upload_url, data=file_bytes, headers=headers)
+    resp.raise_for_status()
+    return safe_name
+
+
+def download_test_file(file_name: str) -> bytes:
+    """Download a test file from the Tests subfolder and return raw bytes."""
+    token   = get_access_token()
+    encoded = requests.utils.quote(f"{SITE_PATH}{FOLDER_PATH}/Tests/{file_name}")
+    url     = f"{SHAREPOINT_URL}{SITE_PATH}/_api/web/GetFileByServerRelativeUrl('{encoded}')/$value"
+    resp    = requests.get(url, headers={
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json;odata=verbose",
+    })
+    resp.raise_for_status()
+    return resp.content

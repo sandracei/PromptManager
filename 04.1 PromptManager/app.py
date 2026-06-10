@@ -6,9 +6,13 @@ import io
 from sharepoint_helper import (
     load_from_sharepoint,
     save_to_sharepoint,
+    upload_test_file,
+    download_test_file,
     FILE_NAME,
-    COLUMNS,
 )
+
+COLUMNS = ["id", "nombre", "descripcion", "prompt", "version",
+           "cambios", "responsable", "fecha", "categoria", "activo", "precision", "test_file"]
 
 # ── Config ───────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -54,6 +58,15 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .badge-person   { background: #dcfce7; color: #166534; }
 .badge-date     { background: #f1f5f9; color: #475569; }
 .badge-inactive { background: #fee2e2; color: #991b1b; }
+.badge-precision-high { background: #dcfce7; color: #166534; }
+.badge-precision-mid  { background: #fef9c3; color: #854d0e; }
+.badge-precision-low  { background: #fee2e2; color: #991b1b; }
+.badge-precision-none { background: #f1f5f9; color: #94a3b8; }
+
+.precision-bar-wrap { display:flex; align-items:center; gap:0.5rem; margin-top:0.5rem; }
+.precision-bar-bg { flex:1; background:#e2e8f0; border-radius:999px; height:6px; }
+.precision-bar-fill { height:6px; border-radius:999px; transition: width 0.4s; }
+.precision-label { font-size:0.75rem; font-weight:600; min-width:36px; text-align:right; }
 
 .prompt-box {
     background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;
@@ -94,6 +107,26 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def next_id(df):
     return int(df["id"].max()) + 1 if not df.empty and df["id"].notna().any() else 1
+
+def precision_badge(val):
+    """Return HTML badge + mini bar for a precision value (0-100 or empty)."""
+    try:
+        p = int(float(val))
+    except (TypeError, ValueError):
+        return '<span class="badge badge-precision-none">Sin datos</span>'
+    if p >= 80:
+        cls, bar_color = "badge-precision-high", "#22c55e"
+    elif p >= 50:
+        cls, bar_color = "badge-precision-mid",  "#eab308"
+    else:
+        cls, bar_color = "badge-precision-low",  "#ef4444"
+    return (
+        f'<span class="badge {cls}">🎯 {p}%</span>'
+        f'<div class="precision-bar-wrap" style="display:inline-flex;width:80px;margin-left:4px;vertical-align:middle;">'
+        f'<div class="precision-bar-bg" style="flex:1;">'
+        f'<div class="precision-bar-fill" style="width:{p}%;background:{bar_color};"></div>'
+        f'</div></div>'
+    )
 
 def next_version(df, nombre):
     rows = df[df["nombre"] == nombre]
@@ -228,19 +261,23 @@ if "Inicio" in pagina:
         st.warning("No hay prompts que coincidan con los filtros.")
     else:
         for _, row in filtered.iterrows():
-            nombre   = str(row.get("nombre", ""))
-            desc     = str(row.get("descripcion", ""))
-            ver      = str(row.get("version", ""))
-            cat      = str(row.get("categoria", ""))
-            resp     = str(row.get("responsable", ""))
-            fecha    = str(row.get("fecha", ""))
-            activo   = str(row.get("activo", "true")).lower() != "false"
-            cambios  = str(row.get("cambios", ""))
+            nombre    = str(row.get("nombre", ""))
+            desc      = str(row.get("descripcion", ""))
+            ver       = str(row.get("version", ""))
+            cat       = str(row.get("categoria", ""))
+            resp      = str(row.get("responsable", ""))
+            fecha     = str(row.get("fecha", ""))
+            activo    = str(row.get("activo", "true")).lower() != "false"
+            cambios   = str(row.get("cambios", ""))
+            prec_raw  = row.get("precision", "")
+            test_file = str(row.get("test_file", ""))
 
             inactive_badge = '' if activo else '<span class="badge badge-inactive">Inactivo</span>'
             cat_badge  = f'<span class="badge badge-category">{cat}</span>' if cat and cat != "nan" else ""
             resp_badge = f'<span class="badge badge-person">👤 {resp}</span>' if resp and resp != "nan" else ""
             date_badge = f'<span class="badge badge-date">📅 {fecha}</span>' if fecha and fecha != "nan" else ""
+            prec_html  = precision_badge(prec_raw)
+            test_badge = '<span class="badge badge-date">🧪 Test adjunto</span>' if test_file and test_file != "nan" else ""
 
             st.markdown(f"""
             <div class="prompt-card">
@@ -249,6 +286,7 @@ if "Inicio" in pagina:
               <div class="card-meta">
                 <span class="badge badge-version">v{ver}</span>
                 {cat_badge}{resp_badge}{date_badge}
+                {prec_html}{test_badge}
               </div>
             </div>
             """, unsafe_allow_html=True)
@@ -257,20 +295,45 @@ if "Inicio" in pagina:
                 prompt_text = str(row.get("prompt", ""))
                 st.markdown(f'<div class="prompt-box">{prompt_text}</div>', unsafe_allow_html=True)
 
+                # Download test file if exists
+                if test_file and test_file != "nan":
+                    st.markdown("---")
+                    st.markdown('<div class="section-title">Archivo de test</div>', unsafe_allow_html=True)
+                    col_t1, col_t2 = st.columns([3, 1])
+                    with col_t1:
+                        st.markdown(f"📎 `{test_file}`")
+                    with col_t2:
+                        if st.button("⬇️ Descargar", key=f"dl_test_{row['id']}"):
+                            try:
+                                file_bytes = download_test_file(test_file)
+                                st.download_button(
+                                    "Guardar archivo",
+                                    file_bytes,
+                                    file_name=test_file,
+                                    key=f"save_test_{row['id']}",
+                                )
+                            except Exception as e:
+                                st.error(f"No se pudo descargar el archivo: {e}")
+
+                # History
                 historial = df[df["nombre"] == nombre].sort_values("version", ascending=False)
                 if len(historial) > 1:
                     st.markdown("---")
                     st.markdown('<div class="section-title">Historial de versiones</div>', unsafe_allow_html=True)
                     for _, hrow in historial.iterrows():
-                        hcambios = str(hrow.get("cambios", ""))
-                        hresp    = str(hrow.get("responsable", ""))
-                        hfecha   = str(hrow.get("fecha", ""))
-                        meta = " · ".join(x for x in [hresp, hfecha] if x and x != "nan")
+                        hcambios   = str(hrow.get("cambios", ""))
+                        hresp      = str(hrow.get("responsable", ""))
+                        hfecha     = str(hrow.get("fecha", ""))
+                        hprec      = hrow.get("precision", "")
+                        htest      = str(hrow.get("test_file", ""))
+                        meta       = " · ".join(x for x in [hresp, hfecha] if x and x != "nan")
+                        prec_str   = f" · 🎯 {int(float(hprec))}%" if hprec and str(hprec) not in ("", "nan") else ""
+                        test_str   = f" · 🧪 `{htest}`" if htest and htest != "nan" else ""
                         st.markdown(f"""
                         <div class="hist-row">
                           <div class="hist-ver">v{hrow['version']}</div>
                           <div>
-                            <div class="hist-meta">{meta}</div>
+                            <div class="hist-meta">{meta}{prec_str}{test_str}</div>
                             <div class="hist-changes">{hcambios if hcambios != "nan" else "—"}</div>
                           </div>
                         </div>
@@ -324,6 +387,11 @@ elif "Añadir" in pagina:
         categoria   = st.text_input("Categoría", value=prefill_cat, placeholder="ej. Marketing, RRHH…")
         responsable = st.text_input("Responsable *", value=prefill_resp, placeholder="Tu nombre")
         fecha       = st.date_input("Fecha", value=date.today())
+        precision   = st.slider("Precisión (%)", min_value=0, max_value=100, value=0, step=1,
+                                help="0 = sin datos todavía")
+        test_upload = st.file_uploader("📎 Archivo de test",
+                                       type=["xlsx", "xls", "csv", "pdf", "docx", "txt"],
+                                       help="Excel, CSV, PDF o Word con los casos de test de esta versión")
         if nombre and nombre in df["nombre"].values:
             nueva_ver = next_version(df, nombre)
             st.info(f"Ya existe. Se guardará como **v{nueva_ver}**.")
@@ -334,12 +402,22 @@ elif "Añadir" in pagina:
         if not nombre or not prompt_text or not responsable:
             st.error("Los campos marcados con * son obligatorios.")
         else:
-            version = next_version(df, nombre)
+            version   = next_version(df, nombre)
+            test_ref  = ""
+            if test_upload is not None:
+                with st.spinner("Subiendo archivo de test a SharePoint…"):
+                    # Build a unique name: test_<nombre>_v<version>.<ext>
+                    ext      = test_upload.name.rsplit(".", 1)[-1]
+                    safe_nom = nombre.replace(" ", "_").replace("/", "-")
+                    fname    = f"test_{safe_nom}_v{version}.{ext}"
+                    test_ref = upload_test_file(test_upload.read(), fname)
             new_row = {
                 "id": next_id(df), "nombre": nombre, "descripcion": descripcion,
                 "prompt": prompt_text, "version": version, "cambios": cambios,
                 "responsable": responsable, "fecha": str(fecha),
                 "categoria": categoria, "activo": True,
+                "precision": precision if precision > 0 else "",
+                "test_file": test_ref,
             }
             df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
             with st.spinner("Guardando en SharePoint…"):
@@ -449,5 +527,5 @@ elif "Exportar" in pagina:
                            use_container_width=True)
 
     st.markdown("---")
-    st.dataframe(latest_df[["nombre", "version", "categoria", "responsable", "fecha", "descripcion"]],
+    st.dataframe(latest_df[["nombre", "version", "precision", "test_file", "categoria", "responsable", "fecha", "descripcion"]],
                  use_container_width=True, hide_index=True)
