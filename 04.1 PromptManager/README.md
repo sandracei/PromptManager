@@ -1,6 +1,5 @@
-# 📚 Biblioteca de Prompts — con SharePoint
 
-## 🚀 Cómo arrancar
+## Cómo arrancar
 
 ### 1. Instala las dependencias (solo la primera vez)
 ```bash
@@ -14,7 +13,7 @@ streamlit run app.py
 
 ---
 
-## 🔐 Primer inicio de sesión
+## Primer inicio de sesión
 
 La primera vez que arranques la app (y cuando el token expire, aprox. cada 90 días):
 
@@ -25,11 +24,11 @@ La primera vez que arranques la app (y cuando el token expire, aprox. cada 90 d�
 5. Vuelve a la app y pulsa **"Verificar sesión"**
 
 El token se guarda en `.msal_token_cache.json` (en la misma carpeta). Cada compañero tiene el suyo.
-⚠️ No compartas ese archivo con nadie.
+No compartas ese archivo con nadie.
 
 ---
 
-## 📁 Archivos del proyecto
+## Archivos del proyecto
 
 ```
 prompt_library/
@@ -46,10 +45,9 @@ El archivo `prompts.csv` vive en SharePoint, en la carpeta:
 
 ---
 
-## ✨ Funcionalidades
+## Funcionalidades
 
-| Sección | Qué puedes hacer |
-|---|---|
+
 | 🏠 Inicio | Buscar, filtrar, leer prompts. Ver historial. Editar o desactivar. |
 | ➕ Añadir prompt | Crear nuevo o nueva versión (versionado automático). |
 | 📤 Importar archivo | Subir prompts desde `.txt`, `.csv` o `.xlsx`. |
@@ -57,7 +55,7 @@ El archivo `prompts.csv` vive en SharePoint, en la carpeta:
 
 ---
 
-## 📋 Formato para importar CSV/Excel
+## Formato para importar CSV/Excel
 
 | Columna | Obligatoria |
 |---|---|
@@ -69,7 +67,7 @@ El archivo `prompts.csv` vive en SharePoint, en la carpeta:
 
 ---
 
-## 💡 Consejos
+## Consejos
 
 - Pulsa **🔄 Recargar datos** en el menú si otra persona ha guardado cambios recientemente.
 - Si alguien edita el CSV directamente en SharePoint, recarga para sincronizar.
