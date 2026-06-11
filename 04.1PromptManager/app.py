@@ -15,8 +15,8 @@ COLUMNS = ["id", "nombre", "descripcion", "prompt", "version",
 
 # ── Config ───────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Biblioteca de Prompts",
-    page_icon="📚",
+    page_title="PromptManager · RotF Chatbot Team",
+    page_icon="🤖",
     layout="wide",
 )
 
@@ -98,6 +98,25 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     padding: 4px 10px; font-size: 0.78rem; color: #1d4ed8; margin-bottom: 1rem;
 }
 
+/* Precision + owner highlight block */
+.kpi-block {
+    display: flex; gap: 1rem; margin-top: 0.8rem; flex-wrap: wrap;
+}
+.kpi-item {
+    background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;
+    padding: 0.6rem 1rem; display: flex; flex-direction: column; gap: 0.15rem;
+    min-width: 120px;
+}
+.kpi-item.kpi-high { border-left: 3px solid #22c55e; }
+.kpi-item.kpi-mid  { border-left: 3px solid #eab308; }
+.kpi-item.kpi-low  { border-left: 3px solid #ef4444; }
+.kpi-item.kpi-none { border-left: 3px solid #cbd5e1; }
+.kpi-item.kpi-owner { border-left: 3px solid #6366f1; }
+.kpi-label { font-size: 0.68rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.06em; }
+.kpi-value { font-size: 1.1rem; font-weight: 700; color: #1e293b; }
+.kpi-bar-bg { background: #e2e8f0; border-radius: 999px; height: 4px; margin-top: 4px; }
+.kpi-bar-fill { height: 4px; border-radius: 999px; }
+
 #MainMenu, footer { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
@@ -108,24 +127,55 @@ def next_id(df):
     return int(df["id"].max()) + 1 if not df.empty and df["id"].notna().any() else 1
 
 def precision_badge(val):
-    """Return HTML badge + mini bar for a precision value (0-100 or empty)."""
+    """Return inline badge for precision (used in card meta row)."""
     try:
-        p = int(float(val))
+        p = round(float(val), 1)
     except (TypeError, ValueError):
         return '<span class="badge badge-precision-none">Sin datos</span>'
     if p >= 80:
-        cls, bar_color = "badge-precision-high", "#22c55e"
+        cls = "badge-precision-high"
     elif p >= 50:
-        cls, bar_color = "badge-precision-mid",  "#eab308"
+        cls = "badge-precision-mid"
     else:
-        cls, bar_color = "badge-precision-low",  "#ef4444"
-    return (
-        f'<span class="badge {cls}">🎯 {p}%</span>'
-        f'<div class="precision-bar-wrap" style="display:inline-flex;width:80px;margin-left:4px;vertical-align:middle;">'
-        f'<div class="precision-bar-bg" style="flex:1;">'
-        f'<div class="precision-bar-fill" style="width:{p}%;background:{bar_color};"></div>'
-        f'</div></div>'
-    )
+        cls = "badge-precision-low"
+    return f'<span class="badge {cls}">🎯 {p}%</span>'
+
+
+def precision_kpi_block(prec_raw, resp):
+    """Return a highlighted KPI block showing precision + owner."""
+    # Precision block
+    try:
+        p = round(float(prec_raw), 1)
+        if p >= 80:
+            kpi_cls, bar_color = "kpi-high", "#22c55e"
+        elif p >= 50:
+            kpi_cls, bar_color = "kpi-mid",  "#eab308"
+        else:
+            kpi_cls, bar_color = "kpi-low",  "#ef4444"
+        prec_block = (
+            f'<div class="kpi-item {kpi_cls}">'
+            f'<span class="kpi-label">Precisión</span>'
+            f'<span class="kpi-value">{p}%</span>'
+            f'<div class="kpi-bar-bg"><div class="kpi-bar-fill" style="width:{min(p,100)}%;background:{bar_color};"></div></div>'
+            f'</div>'
+        )
+    except (TypeError, ValueError):
+        prec_block = (
+            '<div class="kpi-item kpi-none">'
+            '<span class="kpi-label">Precisión</span>'
+            '<span class="kpi-value" style="color:#94a3b8;font-size:0.85rem;">Sin datos</span>'
+            '</div>'
+        )
+    # Owner block
+    owner_block = ""
+    if resp and resp != "nan":
+        owner_block = (
+            f'<div class="kpi-item kpi-owner">'
+            f'<span class="kpi-label">Responsable</span>'
+            f'<span class="kpi-value" style="font-size:0.95rem;">{resp}</span>'
+            f'</div>'
+        )
+    return f'<div class="kpi-block">{prec_block}{owner_block}</div>'
 
 def next_version(df, nombre):
     rows = df[df["nombre"] == nombre]
@@ -174,7 +224,7 @@ def parse_uploaded_file(uploaded_file):
 # ── Load data (session_state cache, no st.cache_data to avoid widget conflicts)
 def cached_load():
     if "df_prompts" not in st.session_state:
-        with st.spinner("Cargando prompts desde SharePoint…"):
+        with st.spinner("Cargando prompts desde Google Sheets…"):
             st.session_state["df_prompts"] = load_from_sheets()
     return st.session_state["df_prompts"]
 
@@ -185,8 +235,8 @@ def reload_data():
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## 📚 Prompt Library")
-    st.markdown('<div class="sp-badge">☁️ SharePoint</div>', unsafe_allow_html=True)
+    st.markdown("## 🤖 PromptManager")
+    st.markdown('<div class="sp-badge">☁️ Google Sheets</div>', unsafe_allow_html=True)
     st.markdown("---")
     pagina = st.radio(
         "Navegación",
@@ -197,7 +247,7 @@ with st.sidebar:
     if st.button("🔄 Recargar datos", use_container_width=True):
         reload_data()
     st.markdown("---")
-    st.markdown('<p style="font-size:0.7rem;color:#475569;">Prompt Library v1.0</p>', unsafe_allow_html=True)
+    st.markdown('<p style="font-size:0.7rem;color:#475569;">PromptManager v1.0</p>', unsafe_allow_html=True)
 
 df = cached_load()
 
@@ -209,8 +259,8 @@ if "Inicio" in pagina:
     st.markdown("""
     <div class="header-strip">
       <div>
-        <h1>📚 Biblioteca de Prompts</h1>
-        <p>Gestiona, versiona y comparte los prompts del equipo · almacenado en SharePoint</p>
+        <h1>🤖 PromptManager · RotF Chatbot Team</h1>
+        <p>Repositorio centralizado de prompts del equipo RotF Chatbot</p>
       </div>
     </div>
     """, unsafe_allow_html=True)
@@ -275,10 +325,9 @@ if "Inicio" in pagina:
 
             inactive_badge = '' if activo else '<span class="badge badge-inactive">Inactivo</span>'
             cat_badge  = f'<span class="badge badge-category">{cat}</span>' if cat and cat != "nan" else ""
-            resp_badge = f'<span class="badge badge-person">👤 {resp}</span>' if resp and resp != "nan" else ""
             date_badge = f'<span class="badge badge-date">📅 {fecha}</span>' if fecha and fecha != "nan" else ""
             prec_html  = precision_badge(prec_raw)
-            test_badge = '<span class="badge badge-date">🧪 Test adjunto</span>' if test_file and test_file != "nan" else ""
+            test_badge = '<span class="badge badge-date">🧪 Dataset adjunto</span>' if test_file and test_file != "nan" else ""
 
             st.markdown(f"""
             <div class="prompt-card">
@@ -286,20 +335,22 @@ if "Inicio" in pagina:
               <div class="card-desc">{desc if desc != "nan" else ""}</div>
               <div class="card-meta">
                 <span class="badge badge-version">v{ver}</span>
-                {cat_badge}{resp_badge}{date_badge}
-                {prec_html}{test_badge}
+                {cat_badge}{date_badge}{prec_html}{test_badge}
               </div>
             </div>
             """, unsafe_allow_html=True)
 
             with st.expander(f"Ver · {nombre}"):
+                # KPI block — precision + owner highlighted
+                st.markdown(precision_kpi_block(prec_raw, resp), unsafe_allow_html=True)
+
                 prompt_text = str(row.get("prompt", ""))
                 st.markdown(f'<div class="prompt-box">{prompt_text}</div>', unsafe_allow_html=True)
 
                 # Download test file if exists
                 if test_file and test_file != "nan":
                     st.markdown("---")
-                    st.markdown('<div class="section-title">Archivo de test</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="section-title">Dataset de prueba</div>', unsafe_allow_html=True)
                     col_t1, col_t2 = st.columns([3, 1])
                     with col_t1:
                         st.markdown(f"📎 `{test_file}`")
@@ -328,7 +379,7 @@ if "Inicio" in pagina:
                         hprec      = hrow.get("precision", "")
                         htest      = str(hrow.get("test_file", ""))
                         meta       = " · ".join(x for x in [hresp, hfecha] if x and x != "nan")
-                        prec_str   = f" · 🎯 {int(float(hprec))}%" if hprec and str(hprec) not in ("", "nan") else ""
+                        prec_str   = f" · 🎯 {round(float(hprec), 1)}%" if hprec and str(hprec) not in ("", "nan") else ""
                         test_str   = f" · 🧪 `{htest}`" if htest and htest != "nan" else ""
                         st.markdown(f"""
                         <div class="hist-row">
@@ -380,33 +431,33 @@ elif "Añadir" in pagina:
 
     col1, col2 = st.columns([2, 1])
     with col1:
-        nombre      = st.text_input("Nombre del prompt *", value=prefill_nombre, placeholder="ej. Resumen de reunión")
-        descripcion = st.text_area("Descripción", value=prefill_desc, placeholder="¿Para qué sirve este prompt?", height=80)
-        prompt_text = st.text_area("Texto del prompt *", value=prefill_prompt, placeholder="Escribe aquí el prompt…", height=200)
-        cambios     = st.text_area("¿Qué se ha cambiado?", placeholder="ej. Añadida instrucción de tono formal", height=80)
+        nombre      = st.text_input("Nombre del prompt *", value=prefill_nombre, placeholder="ej. User Query Classification and Fallback")
+        descripcion = st.text_area("Descripción", value=prefill_desc, placeholder="ej. Clasifica el input del usuario como RAG, TICKET o fallback según si está relacionado con OTR.", height=80)
+        prompt_text = st.text_area("Texto del prompt *", value=prefill_prompt, placeholder="ej. You are a helpful assistant for a chatbot that supports users of the One Touch Retail (OTR) sales system. Your task is to analyze the user's input and respond only with what is strictly necessary…", height=200)
+        cambios     = st.text_area("¿Qué se ha cambiado?", placeholder="ej. Añadida regla para inputs en alemán / corregido comportamiento con emojis", height=80)
     with col2:
-        categoria   = st.text_input("Categoría", value=prefill_cat, placeholder="ej. Marketing, RRHH…")
-        responsable = st.text_input("Responsable *", value=prefill_resp, placeholder="Tu nombre")
+        categoria   = st.text_input("Categoría", value=prefill_cat, placeholder="ej. UC02_GPTFallback, UC07_RAGSearch…")
+        responsable = st.text_input("Responsable *", value=prefill_resp, placeholder="ej. Sandra, Adri. Gaz…")
         fecha       = st.date_input("Fecha", value=date.today())
-        precision   = st.slider("Precisión (%)", min_value=0, max_value=100, value=0, step=1,
+        precision   = st.number_input("Precisión (%)", min_value=0.0, max_value=100.0, value=0.0, step=0.1, format="%.1f",
                                 help="0 = sin datos todavía")
-        test_upload = st.file_uploader("📎 Archivo de test",
+        test_upload = st.file_uploader("📎 Dataset de prueba",
                                        type=["xlsx", "xls", "csv", "pdf", "docx", "txt"],
-                                       help="Excel, CSV, PDF o Word con los casos de test de esta versión")
+                                       help="Excel, CSV, PDF o Word con los casos de prueba de esta versión")
         if nombre and nombre in df["nombre"].values:
             nueva_ver = next_version(df, nombre)
             st.info(f"Ya existe. Se guardará como **v{nueva_ver}**.")
         else:
             st.info("Nuevo prompt → se guardará como **v1.0**.")
 
-    if st.button("💾 Guardar en SharePoint", type="primary", use_container_width=True):
+    if st.button("💾 Guardar", type="primary", use_container_width=True):
         if not nombre or not prompt_text or not responsable:
             st.error("Los campos marcados con * son obligatorios.")
         else:
             version   = next_version(df, nombre)
             test_ref  = ""
             if test_upload is not None:
-                with st.spinner("Subiendo archivo de test a SharePoint…"):
+                with st.spinner("Subiendo archivo de test…"):
                     # Build a unique name: test_<nombre>_v<version>.<ext>
                     ext      = test_upload.name.rsplit(".", 1)[-1]
                     safe_nom = nombre.replace(" ", "_").replace("/", "-")
@@ -421,10 +472,10 @@ elif "Añadir" in pagina:
                 "test_file": test_ref,
             }
             df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-            with st.spinner("Guardando en SharePoint…"):
+            with st.spinner("Guardando…"):
                 save_to_sheets(df)
             reload_data()
-            st.success(f"✅ «{nombre}» guardado como v{version} en SharePoint.")
+            st.success(f"✅ «{nombre}» guardado como v{version} en Google Sheets.")
             st.balloons()
 
 
@@ -459,7 +510,7 @@ elif "Importar" in pagina:
                     txt = p.get("prompt", "")
                     st.write(txt[:500] + ("…" if len(txt) > 500 else ""))
 
-            if st.button("⬆️ Importar todos en SharePoint", type="primary"):
+            if st.button("⬆️ Importar todos", type="primary"):
                 if not responsable_import:
                     st.error("Indica el responsable antes de importar.")
                 else:
@@ -479,10 +530,10 @@ elif "Importar" in pagina:
                         }
                         df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
                         added += 1
-                    with st.spinner("Guardando en SharePoint…"):
+                    with st.spinner("Guardando…"):
                         save_to_sheets(df)
                     reload_data()
-                    st.success(f"✅ {added} prompts importados y guardados en SharePoint.")
+                    st.success(f"✅ {added} prompts importados y guardados correctamente.")
         except Exception as e:
             st.error(f"Error al procesar el archivo: {e}")
 
